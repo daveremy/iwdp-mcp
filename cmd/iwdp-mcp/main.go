@@ -64,7 +64,7 @@ func lookupInterceptStage(requestID string) string {
 func main() {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "iwdp-mcp",
-		Version: "0.5.2",
+		Version: "0.5.3",
 	}, nil)
 
 	registerTools(server)
