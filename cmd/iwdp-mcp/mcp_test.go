@@ -34,6 +34,51 @@ func TestServerCreationWithRegisterTools(t *testing.T) {
 	}
 }
 
+func TestToolInputSchemasIncludeProperties(t *testing.T) {
+	ctx := context.Background()
+	impl := &mcp.Implementation{Name: "iwdp-mcp-test", Version: "0.1.0"}
+	server := mcp.NewServer(impl, nil)
+	registerTools(server)
+	client := mcp.NewClient(impl, nil)
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+
+	serverSession, err := server.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatalf("server.Connect: %v", err)
+	}
+	defer func() { _ = serverSession.Close() }()
+
+	clientSession, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client.Connect: %v", err)
+	}
+	defer func() { _ = clientSession.Close() }()
+
+	res, err := clientSession.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	if len(res.Tools) == 0 {
+		t.Fatal("expected registered tools")
+	}
+
+	for _, tool := range res.Tools {
+		data, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatalf("marshal input schema for %s: %v", tool.Name, err)
+		}
+		var schema map[string]any
+		if err := json.Unmarshal(data, &schema); err != nil {
+			t.Fatalf("unmarshal input schema for %s: %v", tool.Name, err)
+		}
+		if schema["type"] == "object" {
+			if _, ok := schema["properties"]; !ok {
+				t.Fatalf("tool %s object input schema is missing properties: %s", tool.Name, data)
+			}
+		}
+	}
+}
+
 func TestGetClientNoSession(t *testing.T) {
 	// Reset global session state before the test.
 	sess.mu.Lock()

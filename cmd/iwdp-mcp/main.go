@@ -9,9 +9,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/nnemirovsky/iwdp-mcp/internal/proxy"
 	"github.com/nnemirovsky/iwdp-mcp/internal/tools"
@@ -70,6 +72,26 @@ func main() {
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		log.Fatal(err)
+	}
+}
+
+func addTool[In, Out any](s *mcp.Server, t *mcp.Tool, h mcp.ToolHandlerFor[In, Out]) {
+	if t.InputSchema == nil && isEmptyStructType(reflect.TypeFor[In]()) {
+		copy := *t
+		copy.InputSchema = emptyObjectInputSchema()
+		t = &copy
+	}
+	mcp.AddTool(s, t, h)
+}
+
+func isEmptyStructType(t reflect.Type) bool {
+	return t.Kind() == reflect.Struct && t.NumField() == 0
+}
+
+func emptyObjectInputSchema() *jsonschema.Schema {
+	return &jsonschema.Schema{
+		Type:       "object",
+		Properties: map[string]*jsonschema.Schema{},
 	}
 }
 
@@ -493,7 +515,7 @@ func largeResultToFile(result any, prefix string) (*mcp.CallToolResult, error) {
 
 func registerTools(server *mcp.Server) {
 	// --- iwdp status ---
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "iwdp_status", Description: "Check if ios-webkit-debug-proxy is running and optionally start it. Call this first before any other tool to ensure iwdp is available.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input IWDPStatusInput) (*mcp.CallToolResult, any, error) {
 		running := proxy.IsRunning()
@@ -511,7 +533,7 @@ func registerTools(server *mcp.Server) {
 		return nil, map[string]any{"running": true, "started": true, "message": "ios-webkit-debug-proxy was not running — started it automatically"}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "restart_iwdp", Description: "Restart ios-webkit-debug-proxy. Use this to recover after a crash (e.g., after a large heap snapshot kills the connection).",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		// Also disconnect any active WebSocket client since the old connection is dead
@@ -528,7 +550,7 @@ func registerTools(server *mcp.Server) {
 	})
 
 	// --- Device/Page management ---
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "list_devices", Description: "List connected iOS devices (from iwdp listing port 9221). Each device's URL shows which port to use for list_pages.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ ListDevicesInput) (*mcp.CallToolResult, any, error) {
 		if err := proxy.EnsureRunning(ctx); err != nil {
@@ -541,7 +563,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ListDevicesOutput{Devices: devices}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "list_pages", Description: "List open Safari tabs/pages on a device port. Use list_devices to find each device's port (default: 9222 for first device, 9223 for second, etc.)",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input ListPagesInput) (*mcp.CallToolResult, any, error) {
 		if err := proxy.EnsureRunning(ctx); err != nil {
@@ -558,7 +580,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ListPagesOutput{Pages: pages}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "select_page", Description: "Connect to a specific Safari tab by its WebSocket URL",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SelectPageInput) (*mcp.CallToolResult, any, error) {
 		// Validate the WebSocket URL points to localhost only.
@@ -596,7 +618,7 @@ func registerTools(server *mcp.Server) {
 	})
 
 	// --- Page ---
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "navigate", Description: "Navigate to a URL",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input NavigateInput) (*mcp.CallToolResult, any, error) {
 		// Validate URL scheme — only http and https are allowed.
@@ -615,7 +637,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.Navigate(ctx, c, input.URL)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "reload", Description: "Reload the current page",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input ReloadInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -625,7 +647,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.Reload(ctx, c, input.IgnoreCache)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "take_screenshot", Description: "Capture page screenshot as PNG file. Returns the file path — use the Read tool to view it.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ TakeScreenshotInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -643,7 +665,7 @@ func registerTools(server *mcp.Server) {
 		return result, TakeScreenshotOutput{FilePath: path}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "snapshot_node", Description: "Capture a specific DOM node as PNG file. Returns the file path — use the Read tool to view it.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SnapshotNodeInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -662,7 +684,7 @@ func registerTools(server *mcp.Server) {
 	})
 
 	// --- Runtime ---
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "evaluate_script", Description: "Evaluate JavaScript expression in page context",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input EvaluateScriptInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -680,7 +702,7 @@ func registerTools(server *mcp.Server) {
 		return nil, out, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "call_function", Description: "Call a function on a remote object",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input CallFunctionInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -698,7 +720,7 @@ func registerTools(server *mcp.Server) {
 		return nil, out, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_properties", Description: "Get properties of a remote object",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetPropertiesInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -717,7 +739,7 @@ func registerTools(server *mcp.Server) {
 	})
 
 	// --- DOM ---
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_document", Description: "Get the DOM tree",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetDocumentInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -735,7 +757,7 @@ func registerTools(server *mcp.Server) {
 		return nil, out, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "query_selector", Description: "Find first element matching CSS selector",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input QuerySelectorInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -749,7 +771,7 @@ func registerTools(server *mcp.Server) {
 		return nil, NodeIDOutput{NodeID: nodeID}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "query_selector_all", Description: "Find all elements matching CSS selector",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input QuerySelectorAllInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -763,7 +785,7 @@ func registerTools(server *mcp.Server) {
 		return nil, QuerySelectorAllOutput{NodeIDs: nodeIDs}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_outer_html", Description: "Get element outer HTML",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetOuterHTMLInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -781,7 +803,7 @@ func registerTools(server *mcp.Server) {
 		return nil, out, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_attributes", Description: "Get element attributes",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetAttributesInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -795,7 +817,7 @@ func registerTools(server *mcp.Server) {
 		return nil, GetAttributesOutput{Attributes: attrs}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_event_listeners", Description: "Get event listeners on a DOM node",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetEventListenersInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -809,7 +831,7 @@ func registerTools(server *mcp.Server) {
 		return nil, RawOutput{Result: listeners}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "highlight_node", Description: "Highlight a DOM element in the browser",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input HighlightNodeInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -819,7 +841,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.HighlightNode(ctx, c, input.NodeID)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "hide_highlight", Description: "Remove the current DOM highlight overlay",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -830,7 +852,7 @@ func registerTools(server *mcp.Server) {
 	})
 
 	// --- CSS ---
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_matched_styles", Description: "Get matching CSS rules for a node",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetMatchedStylesInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -844,7 +866,7 @@ func registerTools(server *mcp.Server) {
 		return nil, RawOutput{Result: result}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_computed_style", Description: "Get computed style for a node",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetComputedStyleInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -858,7 +880,7 @@ func registerTools(server *mcp.Server) {
 		return nil, RawOutput{Result: props}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_inline_styles", Description: "Get inline styles for a node",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetInlineStylesInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -872,7 +894,7 @@ func registerTools(server *mcp.Server) {
 		return nil, RawOutput{Result: style}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "set_style_text", Description: "Modify a CSS style declaration",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SetStyleTextInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -886,7 +908,7 @@ func registerTools(server *mcp.Server) {
 		return nil, RawOutput{Result: style}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_all_stylesheets", Description: "List all stylesheets",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -900,7 +922,7 @@ func registerTools(server *mcp.Server) {
 		return nil, RawOutput{Result: sheets}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_stylesheet_text", Description: "Get stylesheet source text",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetStylesheetTextInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -914,7 +936,7 @@ func registerTools(server *mcp.Server) {
 		return nil, TextOutput{Text: text}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "force_pseudo_state", Description: "Force pseudo-class state on a node (:hover, :active, :focus, etc.)",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input ForcePseudoStateInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -925,7 +947,7 @@ func registerTools(server *mcp.Server) {
 	})
 
 	// --- Network ---
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "network_enable", Description: "Start network monitoring",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ NetworkEnableInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -941,7 +963,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), nm.Start(ctx, c)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "network_disable", Description: "Stop network monitoring",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ NetworkDisableInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -957,7 +979,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), nm.Stop(ctx, c)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "list_network_requests", Description: "Get collected network requests",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		sess.mu.Lock()
@@ -973,7 +995,7 @@ func registerTools(server *mcp.Server) {
 		return nil, out, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_response_body", Description: "Get response body for a network request",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetResponseBodyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -991,7 +1013,7 @@ func registerTools(server *mcp.Server) {
 		return nil, out, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "set_extra_headers", Description: "Set custom HTTP headers for all requests",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SetExtraHeadersInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1001,7 +1023,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.SetExtraHeaders(ctx, c, input.Headers)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "set_request_interception", Description: "Enable or disable request interception. When enabled, intercepted requests appear in list_intercepted_requests and must be continued or responded to.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SetRequestInterceptionInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1026,7 +1048,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "list_intercepted_requests", Description: "List pending intercepted requests. Each has a request_id to use with intercept_continue or intercept_with_response.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		sess.mu.Lock()
@@ -1038,7 +1060,7 @@ func registerTools(server *mcp.Server) {
 		return nil, RawOutput{Result: ic.GetPending()}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "intercept_continue", Description: "Continue an intercepted request without modification",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input InterceptContinueInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1057,7 +1079,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), err
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "intercept_with_response", Description: "Respond to an intercepted request with a custom response",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input InterceptWithResponseInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1076,7 +1098,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), err
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "intercept_continue_all", Description: "Continue all pending intercepted requests without modification",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1100,7 +1122,7 @@ func registerTools(server *mcp.Server) {
 		return nil, RawOutput{Result: map[string]int{"continued": continued}}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "intercept_block_all", Description: "Block all pending intercepted requests with 403 Forbidden",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1124,7 +1146,7 @@ func registerTools(server *mcp.Server) {
 		return nil, RawOutput{Result: map[string]int{"blocked": blocked}}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "set_emulated_conditions", Description: "Throttle network speed",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SetEmulatedConditionsInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1134,7 +1156,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.SetEmulatedConditions(ctx, c, input.BytesPerSecondLimit)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "set_resource_caching_disabled", Description: "Disable resource caching",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SetResourceCachingDisabledInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1145,7 +1167,7 @@ func registerTools(server *mcp.Server) {
 	})
 
 	// --- Cookies ---
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_cookies", Description: "Get all cookies including httpOnly and secure",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ GetCookiesInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1159,7 +1181,7 @@ func registerTools(server *mcp.Server) {
 		return nil, RawOutput{Result: cookies}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "set_cookie", Description: "Set a cookie",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SetCookieInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1184,7 +1206,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.SetCookie(ctx, c, cookie)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "delete_cookie", Description: "Delete a cookie",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input DeleteCookieInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1195,7 +1217,7 @@ func registerTools(server *mcp.Server) {
 	})
 
 	// --- DOM Storage ---
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_local_storage", Description: "Get localStorage items",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input StorageInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1209,7 +1231,7 @@ func registerTools(server *mcp.Server) {
 		return nil, RawOutput{Result: items}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "set_local_storage_item", Description: "Set a localStorage item",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input StorageItemInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1219,7 +1241,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.SetLocalStorageItem(ctx, c, input.SecurityOrigin, input.Key, input.Value)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "remove_local_storage_item", Description: "Remove a localStorage item",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input StorageRemoveInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1229,7 +1251,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.RemoveLocalStorageItem(ctx, c, input.SecurityOrigin, input.Key)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "clear_local_storage", Description: "Clear all localStorage",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input StorageInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1239,7 +1261,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.ClearLocalStorage(ctx, c, input.SecurityOrigin)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_session_storage", Description: "Get sessionStorage items",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input StorageInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1253,7 +1275,7 @@ func registerTools(server *mcp.Server) {
 		return nil, RawOutput{Result: items}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "set_session_storage_item", Description: "Set a sessionStorage item",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input StorageItemInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1263,7 +1285,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.SetSessionStorageItem(ctx, c, input.SecurityOrigin, input.Key, input.Value)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "remove_session_storage_item", Description: "Remove a sessionStorage item",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input StorageRemoveInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1273,7 +1295,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.RemoveSessionStorageItem(ctx, c, input.SecurityOrigin, input.Key)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "clear_session_storage", Description: "Clear all sessionStorage",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input StorageInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1283,7 +1305,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.ClearSessionStorage(ctx, c, input.SecurityOrigin)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "list_indexed_databases", Description: "List IndexedDB databases",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input StorageInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1297,7 +1319,7 @@ func registerTools(server *mcp.Server) {
 		return nil, RawOutput{Result: dbs}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_indexed_db_data", Description: "Query IndexedDB object store data",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input IndexedDBInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1315,7 +1337,7 @@ func registerTools(server *mcp.Server) {
 		return nil, RawOutput{Result: result}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "clear_indexed_db_store", Description: "Clear an IndexedDB object store",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input IndexedDBInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1326,7 +1348,7 @@ func registerTools(server *mcp.Server) {
 	})
 
 	// --- Console ---
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "console_enable", Description: "Start collecting console messages",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1342,7 +1364,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), cc.Start(ctx, c)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "console_disable", Description: "Stop collecting console messages",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1358,7 +1380,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), cc.Stop(ctx, c)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_console_messages", Description: "Get collected console messages",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ ConsoleGetInput) (*mcp.CallToolResult, any, error) {
 		sess.mu.Lock()
@@ -1374,7 +1396,7 @@ func registerTools(server *mcp.Server) {
 		return nil, out, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "clear_console", Description: "Clear console messages",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1389,7 +1411,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.ClearConsoleMessages(ctx, c)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "set_log_level", Description: "Set logging channel level",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SetLogLevelInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1400,7 +1422,7 @@ func registerTools(server *mcp.Server) {
 	})
 
 	// --- Debugger ---
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "debugger_enable", Description: "Enable JavaScript debugger",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1410,7 +1432,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.DebuggerEnable(ctx, c)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "debugger_disable", Description: "Disable JavaScript debugger",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1420,7 +1442,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.DebuggerDisable(ctx, c)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "set_breakpoint", Description: "Set a breakpoint by URL and line number",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input DebuggerSetBreakpointInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1434,7 +1456,7 @@ func registerTools(server *mcp.Server) {
 		return nil, RawOutput{Result: map[string]interface{}{"breakpointId": bpID, "locations": locs}}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "remove_breakpoint", Description: "Remove a breakpoint",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input BreakpointIDInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1444,7 +1466,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.RemoveBreakpoint(ctx, c, webkit.BreakpointID(input.BreakpointID))
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "pause", Description: "Pause JavaScript execution",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1454,7 +1476,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.Pause(ctx, c)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "resume", Description: "Resume JavaScript execution",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1464,7 +1486,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.Resume(ctx, c)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "step_over", Description: "Step over current statement",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1474,7 +1496,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.StepOver(ctx, c)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "step_into", Description: "Step into function call",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1484,7 +1506,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.StepInto(ctx, c)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "step_out", Description: "Step out of current function",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1494,7 +1516,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.StepOut(ctx, c)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_script_source", Description: "Get source code of a loaded script",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetScriptSourceInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1508,7 +1530,7 @@ func registerTools(server *mcp.Server) {
 		return nil, TextOutput{Text: src}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "search_in_content", Description: "Search within script content",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SearchInContentInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1522,7 +1544,7 @@ func registerTools(server *mcp.Server) {
 		return nil, RawOutput{Result: result}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "evaluate_on_call_frame", Description: "Evaluate expression in paused call frame context",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input EvaluateOnCallFrameInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1536,7 +1558,7 @@ func registerTools(server *mcp.Server) {
 		return nil, RawOutput{Result: result}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "set_pause_on_exceptions", Description: "Configure when to pause on exceptions (none, uncaught, all)",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SetPauseOnExceptionsInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1546,7 +1568,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.SetPauseOnExceptions(ctx, c, input.State)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "set_dom_breakpoint", Description: "Break on DOM modification (subtree-modified, attribute-modified, node-removed)",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input DOMBreakpointInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1556,7 +1578,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.SetDOMBreakpoint(ctx, c, input.NodeID, input.Type)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "remove_dom_breakpoint", Description: "Remove a DOM modification breakpoint",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input DOMBreakpointInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1566,7 +1588,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.RemoveDOMBreakpoint(ctx, c, input.NodeID, input.Type)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "set_event_breakpoint", Description: "Break on event listener",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input EventBreakpointInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1576,7 +1598,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.SetEventBreakpoint(ctx, c, input.BreakpointType, input.EventName)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "remove_event_breakpoint", Description: "Remove an event listener breakpoint",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input EventBreakpointInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1586,7 +1608,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.RemoveEventBreakpoint(ctx, c, input.BreakpointType, input.EventName)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "set_url_breakpoint", Description: "Break on URL request",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input URLBreakpointInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1596,7 +1618,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.SetURLBreakpoint(ctx, c, input.URL, input.IsRegex)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "remove_url_breakpoint", Description: "Remove a URL request breakpoint",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input RemoveURLBreakpointInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1607,7 +1629,7 @@ func registerTools(server *mcp.Server) {
 	})
 
 	// --- Timeline ---
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "timeline_start", Description: "Start timeline recording",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input TimelineStartInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1623,7 +1645,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tc.Start(ctx, c, input.MaxCallStackDepth)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "timeline_stop", Description: "Stop timeline recording",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1639,7 +1661,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tc.Stop(ctx, c)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_timeline_events", Description: "Get recorded timeline events",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		sess.mu.Lock()
@@ -1656,7 +1678,7 @@ func registerTools(server *mcp.Server) {
 	})
 
 	// --- Memory & Heap ---
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "memory_start_tracking", Description: "Start tracking memory usage — collects memory category events",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1672,7 +1694,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), collector.Start(ctx, c)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "memory_stop_tracking", Description: "Stop tracking memory usage and get collected memory events",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1696,7 +1718,7 @@ func registerTools(server *mcp.Server) {
 		return nil, RawOutput{Result: data}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "heap_snapshot", Description: "Take a heap snapshot and save to file. Warning: can be very large (50-200+ MB) on heavy pages and may take minutes.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ HeapSnapshotInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1714,7 +1736,7 @@ func registerTools(server *mcp.Server) {
 		}, TextOutput{Text: filePath}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "heap_start_tracking", Description: "Start tracking heap allocations — collects GC events. Waits up to 5s to confirm event pipeline health.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1742,7 +1764,7 @@ func registerTools(server *mcp.Server) {
 		}{true, "Heap tracking started, but trackingStart event not received (iwdp may not support the 50-200MB snapshot relay). GC events may not be captured. Use heap_snapshot and heap_gc directly instead."}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "heap_stop_tracking", Description: "Stop tracking heap allocations and get collected heap events",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1766,7 +1788,7 @@ func registerTools(server *mcp.Server) {
 		return nil, RawOutput{Result: data}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "heap_gc", Description: "Force garbage collection",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1777,7 +1799,7 @@ func registerTools(server *mcp.Server) {
 	})
 
 	// --- Profiler ---
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "cpu_start_profiling", Description: "Start CPU profiling — collects CPU usage samples via events",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1793,7 +1815,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), collector.Start(ctx, c)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "cpu_stop_profiling", Description: "Stop CPU profiling and get collected CPU usage events",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1817,7 +1839,7 @@ func registerTools(server *mcp.Server) {
 		return nil, RawOutput{Result: data}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "script_start_profiling", Description: "Start script execution profiling with stack sampling",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1833,7 +1855,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), collector.Start(ctx, c)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "script_stop_profiling", Description: "Stop script profiling and get execution events + stack samples",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1858,7 +1880,7 @@ func registerTools(server *mcp.Server) {
 	})
 
 	// --- Animation ---
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "animation_enable", Description: "Enable animation tracking",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1868,7 +1890,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.AnimationEnable(ctx, c)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "animation_disable", Description: "Disable animation tracking",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1878,7 +1900,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.AnimationDisable(ctx, c)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "animation_start_tracking", Description: "Start animation profiling — collects animation events",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1894,7 +1916,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), collector.Start(ctx, c)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "animation_stop_tracking", Description: "Stop animation profiling and get collected animation events",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1918,7 +1940,7 @@ func registerTools(server *mcp.Server) {
 		return nil, RawOutput{Result: data}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_animation_effect", Description: "Get animation effect details",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input AnimationIDInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1932,7 +1954,7 @@ func registerTools(server *mcp.Server) {
 		return nil, RawOutput{Result: result}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "resolve_animation", Description: "Get animation as Runtime remote object",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input AnimationIDInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1947,7 +1969,7 @@ func registerTools(server *mcp.Server) {
 	})
 
 	// --- Canvas ---
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "canvas_enable", Description: "Enable canvas tracking",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1957,7 +1979,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.CanvasEnable(ctx, c)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "canvas_disable", Description: "Disable canvas tracking",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1967,7 +1989,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.CanvasDisable(ctx, c)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_canvas_content", Description: "Get canvas image content",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input CanvasIDInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1981,7 +2003,7 @@ func registerTools(server *mcp.Server) {
 		return nil, TextOutput{Text: content}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "start_canvas_recording", Description: "Record canvas operations",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input CanvasIDInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -1991,7 +2013,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.StartCanvasRecording(ctx, c, input.CanvasID, input.FrameCount)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "stop_canvas_recording", Description: "Stop canvas recording",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input CanvasIDInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -2001,7 +2023,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.StopCanvasRecording(ctx, c, input.CanvasID)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_shader_source", Description: "Get WebGL shader source code",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input ShaderSourceInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -2016,7 +2038,7 @@ func registerTools(server *mcp.Server) {
 	})
 
 	// --- LayerTree ---
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_layer_tree", Description: "Get compositing layers for a node",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input LayerNodeInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -2030,7 +2052,7 @@ func registerTools(server *mcp.Server) {
 		return nil, RawOutput{Result: result}, nil
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_compositing_reasons", Description: "Get reasons why a layer was composited",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input LayerIDInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -2045,7 +2067,7 @@ func registerTools(server *mcp.Server) {
 	})
 
 	// --- Workers ---
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "worker_enable", Description: "Enable web worker tracking",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -2055,7 +2077,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.WorkerEnable(ctx, c)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "worker_disable", Description: "Disable web worker tracking",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -2065,7 +2087,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.WorkerDisable(ctx, c)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "send_to_worker", Description: "Send message to a web worker",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input WorkerMessageInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -2075,7 +2097,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.SendToWorker(ctx, c, input.WorkerID, input.Message)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_service_worker_info", Description: "Get service worker initialization info",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -2090,7 +2112,7 @@ func registerTools(server *mcp.Server) {
 	})
 
 	// --- Audit ---
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "run_audit", Description: "Run a WebKit audit",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input AuditInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -2105,7 +2127,7 @@ func registerTools(server *mcp.Server) {
 	})
 
 	// --- Security ---
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_certificate_info", Description: "Get TLS certificate info for a network request",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input CertificateInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -2120,7 +2142,7 @@ func registerTools(server *mcp.Server) {
 	})
 
 	// --- Browser ---
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "browser_extensions_enable", Description: "Enable browser extensions",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -2130,7 +2152,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), c.Enable(ctx, "Browser")
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "browser_extensions_disable", Description: "Disable browser extensions",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ EmptyInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -2141,7 +2163,7 @@ func registerTools(server *mcp.Server) {
 	})
 
 	// --- Element Interaction ---
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "click", Description: "Click an element by CSS selector",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input ClickInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -2151,7 +2173,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.Click(ctx, c, input.Selector)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "fill", Description: "Fill an input field by CSS selector",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input FillInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
@@ -2161,7 +2183,7 @@ func registerTools(server *mcp.Server) {
 		return nil, ok(), tools.Fill(ctx, c, input.Selector, input.Value)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "type_text", Description: "Type text into the currently focused element",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input TypeTextInput) (*mcp.CallToolResult, any, error) {
 		c, err := getClient(ctx)
